@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Scoreboard Pro (NoSleep)</title>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/nosleep/0.12.0/NoSleep.min.js"></script>
+    
+    <style>
+        /* RESET & BASICS */
+        body { 
+            margin: 0; background: #000; color: #fff; 
+            font-family: 'Impact', 'Arial Black', sans-serif; 
+            overflow: hidden; user-select: none;
+            height: 100vh; width: 100vw;
+            display: flex; flex-direction: column;
+        }
+
+        /* LAYOUT */
+        .container { display: flex; flex: 1; width: 100%; height: 100%; flex-direction: column; }
+        @media (orientation: landscape) {
+            .container { flex-direction: row; }
+            .team { border-bottom: none !important; border-right: 2px solid #333; }
+        }
+
+        /* NUMBERS */
+        .team {
+            flex: 1; display: flex; align-items: center; justify-content: center;
+            position: relative; border-bottom: 2px solid #333; 
+        }
+        .score { font-size: 45vh; line-height: 1; z-index: 10; }
+        @media (orientation: landscape) { .score { font-size: 45vw; } }
+
+        /* VISUALS */
+        .flash-green { animation: flashG 0.2s ease-out; }
+        .flash-red   { color: #ff3333 !important; animation: flashR 0.3s ease-out; }
+        @keyframes flashG { 0% { background: #333; } 100% { background: #000; } }
+        @keyframes flashR { 0% { opacity: 0.5; } 100% { opacity: 1; } }
+
+        /* OVERLAY */
+        #start-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.95); z-index: 999;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+        }
+        #start-btn {
+            font-size: 30px; padding: 20px 40px; background: #28a745; 
+            color: white; border: none; border-radius: 12px; font-weight: bold; cursor: pointer;
+        }
+        #status-msg { margin-top: 15px; color: #666; font-family: sans-serif; font-size: 14px; }
+        
+        #reset-btn {
+            position: absolute; bottom: 0; right: 0;
+            opacity: 0.1; width: 50px; height: 50px; background: red; z-index: 100;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="start-overlay">
+        <button id="start-btn">TAP TO START MATCH</button>
+        <div id="status-msg">Screen Lock: Waiting...</div>
+        <p style="color: #aaa; text-align: center; margin-top:20px; font-family: sans-serif;">
+            Top/Left = <b>Home</b> (Prev |&lt;&lt;)<br>
+            Bottom/Right = <b>Away</b> (Next &gt;&gt;|)<br>
+            Pause = <b>Undo</b>
+        </p>
+    </div>
+
+    <div class="container">
+        <div class="team" id="team-home">
+            <div class="score" id="score-home">0</div>
+        </div>
+        <div class="team" id="team-away">
+            <div class="team-name"></div>
+            <div class="score" id="score-away">0</div>
+        </div>
+    </div>
+
+    <div id="reset-btn" onclick="resetScores()"></div>
+
+    <audio id="silent-audio" loop preload="auto">
+        <source src="https://raw.githubusercontent.com/anars/blank-audio/master/10-seconds-of-silence.mp3" type="audio/mpeg">
+    </audio>
+
+    <script>
+        const audio = document.getElementById('silent-audio');
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = new AudioContext();
+        
+        // 2. Initialize NoSleep
+        const noSleep = new NoSleep();
+
+        let scores = { home: 0, away: 0 };
+        let historyStack = [];
+
+        // --- 1. STARTUP ---
+        document.getElementById('start-btn').addEventListener('click', async () => {
+            try {
+                // A. Enable NoSleep (Must happen inside the click event!)
+                noSleep.enable();
+                document.getElementById('status-msg').innerText = "Screen Lock: NoSleep.js ACTIVE";
+
+                // B. Start Audio Context for beeps
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                
+                // C. Start Silent Track for Media Session
+                await audio.play();
+
+                // D. Hide Overlay
+                document.getElementById('start-overlay').style.display = 'none';
+                
+                // E. Setup Controls
+                if ('mediaSession' in navigator) setupControls();
+                updateDisplay();
+
+            } catch (e) { alert("Initialization failed. Tap again."); }
+        });
+
+        // --- 3. SOUND ---
+        function playBeep(type) {
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            if (type === 'score') {
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(880, audioCtx.currentTime);
+                oscillator.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.1);
+            } else {
+                oscillator.type = 'triangle';
+                oscillator.frequency.setValueAtTime(200, audioCtx.currentTime); 
+                oscillator.frequency.linearRampToValueAtTime(100, audioCtx.currentTime + 0.1);
+            }
+
+            gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + 0.15);
+        }
+
+        // --- 4. CONTROLS ---
+        function setupControls() {
+            navigator.mediaSession.setActionHandler('previoustrack', () => updateScore('home', 1));
+            navigator.mediaSession.setActionHandler('nexttrack', () => updateScore('away', 1));
+            navigator.mediaSession.setActionHandler('pause', () => { undo(); audio.play(); });
+            navigator.mediaSession.setActionHandler('play', () => audio.play());
+            updateMetadata();
+        }
+
+        // --- 5. LOGIC ---
+        function updateScore(team, val) {
+            scores[team] += val;
+            historyStack.push({ team: team, val: val });
+            const teamDiv = document.getElementById(`team-${team}`);
+            teamDiv.classList.remove('flash-green');
+            void teamDiv.offsetWidth; 
+            teamDiv.classList.add('flash-green');
+            playBeep('score');
+            updateDisplay();
+        }
+
+        function undo() {
+            if (historyStack.length === 0) return;
+            const last = historyStack.pop();
+            scores[last.team] -= last.val;
+            if(scores[last.team] < 0) scores[last.team] = 0;
+            const scoreDiv = document.getElementById(`score-${last.team}`);
+            scoreDiv.classList.add('flash-red');
+            setTimeout(() => scoreDiv.classList.remove('flash-red'), 300);
+            playBeep('undo');
+            updateDisplay();
+        }
+
+        function resetScores() {
+            if(confirm("Reset Score?")) {
+                scores = { home: 0, away: 0 };
+                historyStack = [];
+                updateDisplay();
+            }
+        }
+
+        function updateDisplay() {
+            document.getElementById('score-home').innerText = scores.home;
+            document.getElementById('score-away').innerText = scores.away;
+            updateMetadata();
+        }
+
+        function updateMetadata() {
+            if ('mediaSession' in navigator) {
+                navigator.mediaSession.metadata = new MediaMetadata({
+                    title: `${scores.home} - ${scores.away}`,
+                    artist: 'Pause to Undo',
+                    artwork: [{ src: 'https://via.placeholder.com/500/000000/ffffff?text=GAME', type: 'image/png' }]
+                });
+            }
+        }
+    </script>
+</body>
+</html>

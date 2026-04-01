@@ -55,6 +55,8 @@
             opacity: 0.1; width: 50px; height: 50px; background: red; z-index: 100;
         }
     </style>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#000000">
 </head>
 <body>
 
@@ -198,6 +200,19 @@
                 });
             }
         }
+    </script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/score/sw.js')
+            .then(registration => {
+              console.log('ServiceWorker registered successfully');
+            })
+            .catch(err => {
+              console.log('ServiceWorker registration failed: ', err);
+            });
+        });
+      }
     </script>
 </body>
 </html>
